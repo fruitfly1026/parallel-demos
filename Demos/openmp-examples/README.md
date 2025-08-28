@@ -1,4 +1,9 @@
 # openmp-examples
+
+Cloned from another Git Repo: the orginal repo's readme is below. 
+
+===================
+
 This repository contains OpenMP-examples which I created while learning OpenMP. 
 
 I follow Tim Mattson's [Introduction to OpenMP](https://www.youtube.com/watch?v=nE-xN4Bf8XI&list=PLLX-Q6B8xqZ8n8bwjGdzBJ25X2utwnoEG) video playlist on youtube.
