@@ -1,0 +1,11 @@
+# build artifacts
+__pycache__/
+*.pyc
+*.o
+# compiled demo binaries (built per-machine)
+Demos/mpi/0*_*
+Demos/simd/0*_*
+Demos/cuda/0*_*
+!Demos/**/*.c
+!Demos/**/*.cu
+!Demos/**/*.py
