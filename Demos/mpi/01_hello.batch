@@ -8,4 +8,4 @@
 #SBATCH -e 01_hello.%j.err     # stderr
 
 mpicc -O3 -o 01_hello 01_hello.c
-prun ./mpi_hello 
+prun ./01_hello 
