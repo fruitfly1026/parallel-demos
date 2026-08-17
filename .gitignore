@@ -9,3 +9,4 @@ Demos/cuda/0*_*
 !Demos/**/*.c
 !Demos/**/*.cu
 !Demos/**/*.py
+!Demos/**/*.batch
