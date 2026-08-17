@@ -1,0 +1,11 @@
+#!/bin/bash
+#SBATCH -J 01_hello            # job name
+#SBATCH -N 1                   # nodes
+#SBATCH -n 2                   # total MPI tasks
+#SBATCH -p skylake             # partition
+#SBATCH -t 00:10:00            # walltime hh:mm:ss
+#SBATCH -o 01_hello.%j.out     # stdout (%j = job ID)
+#SBATCH -e 01_hello.%j.err     # stderr
+
+mpicc -O3 -o 01_hello 01_hello.c
+prun ./mpi_hello 
