@@ -1,7 +1,7 @@
 /* ============================================================================
    OCCUPANCY -- the UNOPTIMIZED version.  SAXPY (y = a*x + y) launched on a
    single thread block, so 55 of the A4500's 56 SMs sit idle.
-   Split out of the repo's 03_saxpy.cu; the fix is occupancy/saxpy_opt.cu.
+   Split out of the repo's 03_saxpy.cu; the fix is low_occupancy/saxpy_opt.cu.
    ----------------------------------------------------------------------------
    THE INEFFICIENCY
        The kernel itself is fine: a grid-stride loop is correct for ANY launch
@@ -18,7 +18,7 @@
 
      (a) CORRECTNESS CHECK  — GPU result vs a CPU reference, PASS/FAIL.
      (b) PARAMETER VARYING  — 1 / 2 / 4 blocks, all far too few.
-     (c) THE INEFFICIENCY   — see above; FIX in occupancy/saxpy_opt.cu.
+     (c) THE INEFFICIENCY   — see above; FIX in low_occupancy/saxpy_opt.cu.
 
    Build: nvcc -O3 -arch=sm_86 -lineinfo -o saxpy_naive saxpy_naive.cu
    ========================================================================= */
@@ -98,7 +98,7 @@ int main(void) {
         printf("  %2d block(s) : %8.3f ms   %6.1f GB/s   (%d SMs busy)\n",
                blocks, ms, gbps, blocks);
     }
-    printf("\nCompare with occupancy/saxpy_opt.cu (grid sized to fill all %d SMs).\n", sm);
+    printf("\nCompare with low_occupancy/saxpy_opt.cu (grid sized to fill all %d SMs).\n", sm);
 
     cudaFree(x); cudaFree(y);
     return 0;

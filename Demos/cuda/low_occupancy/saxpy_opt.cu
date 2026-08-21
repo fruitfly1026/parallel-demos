@@ -2,10 +2,10 @@
    OCCUPANCY -- the OPTIMIZED version.  SAXPY (y = a*x + y) with the grid sized
    to saturate every SM.
    Split out of the repo's 03_saxpy.cu; the unoptimized one is
-   occupancy/saxpy_naive.cu.
+   low_occupancy/saxpy_naive.cu.
    ----------------------------------------------------------------------------
    ############################################################################
-   #  WHAT CHANGED vs occupancy/saxpy_naive.cu                                #
+   #  WHAT CHANGED vs low_occupancy/saxpy_naive.cu                                #
    ############################################################################
 
    NOT ONE LINE OF THE KERNEL.  `saxpy` is character-for-character identical in
@@ -116,7 +116,7 @@ int main(void) {
         printf("  %2dx SMs = %5d blocks : %.3f ms   %.1f GB/s\n",
                mult, blocks, ms, gbps);
     }
-    printf("\nCompare with occupancy/saxpy_naive.cu (1 block, 1 SM busy).\n");
+    printf("\nCompare with low_occupancy/saxpy_naive.cu (1 block, 1 SM busy).\n");
 
     cudaFree(x); cudaFree(y);
     return 0;
