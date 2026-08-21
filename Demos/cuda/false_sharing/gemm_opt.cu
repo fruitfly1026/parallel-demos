@@ -1,44 +1,63 @@
 /* ============================================================================
-   cuThermo pattern: MEMORY FALSE SHARING  -- the UNOPTIMIZED version.
-   [paper Fig. 5(b); Sec. 6.1; Table 2 "GEMM / gemm_v00"; Table 4 "721.79%"]
+   cuThermo pattern: MEMORY FALSE SHARING  -- the OPTIMIZED version.
+   [paper Fig. 5(b); Sec. 6.1; Table 4: 721.79% on A4500, 672.87% on RTX 4090]
    ----------------------------------------------------------------------------
    SOURCE
-       Kernel `gemm_v00` is taken verbatim from
+       Kernel `gemm_v01` is taken verbatim from
        https://github.com/leimao/CUDA-GEMM-Optimization
-           src/00_non_coalesced_global_memory_access.cu
-       which is reference [20] of the cuThermo paper and the origin of the
-       paper's Listing 2.  Only the host harness below is new.
+           src/01_coalesced_global_memory_access.cu
+       reference [20] of the cuThermo paper.  Only the host harness is new.
 
-   THE INEFFICIENCY
-       threadIdx.x feeds the C ROW index.  With blockDim 32x32 a warp is one
-       row of threadIdx.x at fixed threadIdx.y, so the 32 lanes of a warp are
-       32 DIFFERENT rows of C:
+   ############################################################################
+   #  WHAT CHANGED vs false_sharing/gemm_naive.cu                                  #
+   ############################################################################
 
-           A[C_row_idx*lda + k_idx]   lanes stride lda apart  -> 32 sectors
-           C[C_row_idx*ldc + C_col_idx]  same                 -> 32 sectors
-           B[k_idx*ldb + C_col_idx]   constant across a warp  -> broadcast
+   TWO LINES.  The body of the kernel -- the k loop, the multiply-accumulate,
+   the store -- is character-for-character identical.  Only which thread index
+   feeds which matrix index is swapped:
 
-       B and C are where the FALSE SHARING shows up, and it is an ACROSS-WARP
-       effect.  Warp w of the block has threadIdx.y = w, hence C_col_idx =
-       blockIdx.y*32 + w.  So the 32 warps together touch 32 consecutive words
-       = 4 sectors, and each 32-byte sector has its 8 words claimed by 8
-       DIFFERENT warps:
+       naive.cu (gemm_v00):
+           size_t const C_row_idx{blockIdx.x * blockDim.x + threadIdx.x};   // x -> ROW
+           size_t const C_col_idx{blockIdx.y * blockDim.y + threadIdx.y};   // y -> COL
 
-           Sector | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 |   sector total = 8
-                    ^ each word one warp        ^ but the sector is 8x hotter
+       opt.cu (gemm_v01):
+           size_t const C_col_idx{blockIdx.x * blockDim.x + threadIdx.x};   // x -> COL
+           size_t const C_row_idx{blockIdx.y * blockDim.y + threadIdx.y};   // y -> ROW
 
-       Coalescing merges requests only WITHIN a warp, so those 8 words cost 8
-       separate sector transactions instead of 1.  That is exactly the paper's
-       Fig. 5(b), and Table 2 lists B and C of gemm_v00 as "False sharing".
+   ...and, to match, the launch grid swaps its two extents:
+
+       naive.cu:  grid{(m + bx - 1)/bx, (n + by - 1)/by}
+       opt.cu :   grid{(n + bx - 1)/bx, (m + by - 1)/by}
+
+   WHY THAT FIXES IT
+       threadIdx.x is the fastest-varying index, so it must be mapped to the
+       CONTIGUOUS dimension.  Now the 32 lanes of a warp hold 32 consecutive
+       C_col_idx values, so
+
+           B[k_idx*ldb + C_col_idx]     32 consecutive words = 4 sectors, one warp
+           C[C_row_idx*ldc + C_col_idx] 32 consecutive words = 4 sectors, one warp
+           A[C_row_idx*lda + k_idx]     constant across the warp -> broadcast
+
+       Every word of every fetched sector is now claimed by the SAME warp, so
+       the hardware coalesces them into one transaction each.  In the heat map
+       the sector total drops from 8 back to 1:
+
+           naive.cu   Sector | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 |  total = 8
+           opt.cu     Sector | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 |  total = 1
 
    MEASURED (RTX A4500, N=1024, Nsight Compute)
-       sectors per global LOAD request  : 16.53
-       sectors per global STORE request : 32
-       total global load sectors        : 17.4 M
+                                          naive.cu    opt.cu
+       sectors per global LOAD request      16.53       2.50
+       sectors per global STORE request     32          4
+       total global load sectors            17.4 M      2.63 M
+       kernel time                          12.613 ms   1.552 ms   -> 8.13x
 
-   FIX: see false_sharing/false_sharing_opt.cu -- it is a two-line change.
+       8.13x is a 713% improvement, matching the paper's reported 721.79%.
 
-   Build: nvcc -O3 -arch=sm_86 -lineinfo -o false_sharing_naive false_sharing_naive.cu
+   NOTE: opt.cu still re-reads A and B from global memory on every k step --
+   that leftover is the HOT SPOT pattern, and it is what hotspot/gemm_tiled.cu fixes.
+
+   Build: nvcc -O3 -arch=sm_86 -lineinfo -o gemm_opt gemm_opt.cu
    ========================================================================= */
 #include <cstdio>
 #include <cstdlib>
@@ -55,15 +74,15 @@
         }                                                                     \
     } while (0)
 
-/* ---- kernel, unchanged from leimao src/00_non_coalesced_global_memory_access.cu ---- */
+/* ---- kernel, unchanged from leimao src/01_coalesced_global_memory_access.cu ---- */
 template <typename T>
-__global__ void gemm_v00(size_t m, size_t n, size_t k, T alpha, T const* A,
+__global__ void gemm_v01(size_t m, size_t n, size_t k, T alpha, T const* A,
                          size_t lda, T const* B, size_t ldb, T beta, T* C,
                          size_t ldc)
 {
     // Compute the row and column of C that this thread is responsible for.
-    size_t const C_row_idx{blockIdx.x * blockDim.x + threadIdx.x};
-    size_t const C_col_idx{blockIdx.y * blockDim.y + threadIdx.y};
+    size_t const C_col_idx{blockIdx.x * blockDim.x + threadIdx.x};  /* <-- swapped */
+    size_t const C_row_idx{blockIdx.y * blockDim.y + threadIdx.y};  /* <-- swapped */
 
     if (C_row_idx < m && C_col_idx < n)
     {
@@ -77,15 +96,15 @@ __global__ void gemm_v00(size_t m, size_t n, size_t k, T alpha, T const* A,
     }
 }
 
-/* leimao's launch config for v00: grid.x covers m, grid.y covers n. */
+/* leimao's launch config for v01: grid.x covers n, grid.y covers m (swapped). */
 #define LAUNCH(A, B, Cm, N)                                                   \
-    gemm_v00<float><<<dim3(((unsigned)(N)+31u)/32u, ((unsigned)(N)+31u)/32u),  \
+    gemm_v01<float><<<dim3(((unsigned)(N)+31u)/32u, ((unsigned)(N)+31u)/32u),  \
                       dim3(32u, 32u)>>>((size_t)(N), (size_t)(N), (size_t)(N),\
                       1.0f, (A), (size_t)(N), (B), (size_t)(N), 0.0f,         \
                       (Cm), (size_t)(N))
 
-#define KERNEL_TITLE "GEMM v00 -- non-coalesced / FALSE SHARING on B and C  [unoptimized]"
-#define COMPARE_HINT "Compare with false_sharing/false_sharing_opt.cu (gemm_v01: two index lines swapped)."
+#define KERNEL_TITLE "GEMM v01 -- coalesced, false sharing removed  [optimized]"
+#define COMPARE_HINT "Compare with false_sharing/gemm_naive.cu (gemm_v00). Next step: hotspot/gemm_tiled.cu."
 
 /* ------------------------------------------------------------------ harness */
 static void gemm_cpu(const float *A, const float *B, float *C, int N) {
@@ -173,16 +192,17 @@ int main(void) {
 }
 
 /* Reference run — RTX A4500 (Ampere sm_86, CUDA 13.0), jli256-ub01:
-GEMM v00 -- non-coalesced / FALSE SHARING on B and C  [unoptimized]
+GEMM v01 -- coalesced, false sharing removed  [optimized]
 blockDim 32x32; alpha=1, beta=0 so C = A*B
 
 Correctness (N=512, integer-valued so exact):
   PASS  (max error 0.000e+00, 0/262144 elements wrong)
 
 Size sweep:
-  N= 256 :     0.338 ms     99.4 GFLOP/s  (ok)
-  N= 512 :     1.668 ms    160.9 GFLOP/s  (ok)
-  N=1024 :    12.613 ms    170.3 GFLOP/s  (ok)
+  N= 256 :     0.043 ms    776.5 GFLOP/s  (ok)
+  N= 512 :     0.204 ms   1314.7 GFLOP/s  (ok)
+  N=1024 :     1.550 ms   1385.1 GFLOP/s  (ok)
 
-vs false_sharing_opt.cu at N=1024: 12.613 / 1.550 = 8.14x slower.
+vs gemm_naive.cu at N=1024: 12.613 -> 1.550 ms = 8.14x = +713%
+(paper Table 4 reports 721.79% for this step on the A4500).
 */

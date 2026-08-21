@@ -1,50 +1,43 @@
 /* ============================================================================
-   cuThermo pattern: ABUSE OF SHARED MEMORY -- the OPTIMIZED version.
+   cuThermo pattern: ABUSE OF SHARED MEMORY -- the UNOPTIMIZED version.
    [paper Fig. 5(a); Sec. 6.2, PASTA's spt_TTMRankRBNnzKernelSM / Y_shr]
    ----------------------------------------------------------------------------
-   PROVENANCE: see smem_abuse/smem_abuse_naive.cu.  Self-contained kernel with
-   PASTA's shape, not PASTA's code.
+   PROVENANCE
+       PASTA's kernel cannot be lifted out of its application -- it depends on
+       the sparse tensor format and hundreds of lines of setup.  This file is a
+       minimal kernel with the SAME SHAPE: a tensor-times-matrix inner loop
+       where each thread accumulates a RANK-long result vector, and that vector
+       is parked in shared memory (PASTA calls it Y_shr) even though no other
+       thread ever reads it.  The pattern is faithful; the timings are this
+       benchmark's, not PASTA's 163.56%.
 
-   ############################################################################
-   #  WHAT CHANGED vs smem_abuse/smem_abuse_naive.cu                          #
-   ############################################################################
+   WHAT THE HEAT MAP LOOKS LIKE
+       A line whose address tag lies in the SMEM address space where every
+       word's distinct-warp count is 1 and the sector total is 1 as well:
 
-   THE ACCUMULATOR MOVED FROM SHARED MEMORY TO REGISTERS.  The arithmetic, the
-   loop bounds, the global-memory indexing and the launch configuration are
-   all untouched:
+           SMEM tag | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 |   sector total = 1
+                      ^^^ every word private -- nothing is ever shared
 
-       naive:                                     opt:
-           __shared__ float Y_shr[BLK][RANK];         float acc[RANK];
-           for (r) Y_shr[tid][r] = 0.0f;              #pragma unroll
-           __syncthreads();                           for (r) acc[r] = 0.0f;
-           for (k) {                                  for (k) {
-             float v = X[k*n + i];                      float v = X[k*n + i];
-             for (r)                                    #pragma unroll
-               Y_shr[tid][r] += v * U[k*RANK+r];        for (r)
-           }                                              acc[r] += v * U[k*RANK+r];
-           __syncthreads();                           }
-           for (r) Y[i*RANK+r] = Y_shr[tid][r];       #pragma unroll
-                                                      for (r) Y[i*RANK+r] = acc[r];
+   WHY IT COSTS YOU
+       Y_shr[tid][r] is written and read only by thread tid.  Every one of the
+       RANK accumulations per nonzero becomes a shared-memory read-modify-write
+       -- ~25 cycles of round trip and an LDS/STS instruction pair each -- for
+       data a register would hold at 1 cycle.  On top of that the array costs
+       BLK*RANK*4 = 16 KB of the 128 KB the SM shares between L1 and SMEM.
 
-   Three things go away:
-     1. 16 KB of shared memory per block, returned to L1;
-     2. both __syncthreads() barriers, which were synchronising nothing --
-        no thread ever read another thread's slot;
-     3. NNZ*RANK = 512 shared-memory read-modify-writes per thread, replaced
-        by register accumulation.
+   A NOTE ON MEASURING THIS PATTERN
+       It is easy to build a version of this demo that shows nothing.  If the
+       kernel is DRAM-bandwidth-bound, the SMEM traffic hides completely behind
+       the memory system and both versions run at identical speed.  Worse, if
+       each thread's scratch is a SINGLE scalar, nvcc simply promotes it to a
+       register on its own and the two versions compile to the same code.
+       This demo avoids both traps: the working set is small enough to stay
+       cache-resident, and the scratch is a RANK-long vector, which is large
+       enough that the compiler leaves it in shared memory.
 
-   The `#pragma unroll` on the RANK loops is required, not cosmetic: acc[] is
-   a local array, and nvcc only keeps a local array in registers when every
-   index is resolved at compile time.  Without the pragma it spills to local
-   memory, which is slower than the shared memory we were trying to escape.
-   This is exactly the fix the paper applies to PASTA in Sec. 6.2, where
-   Y_shr becomes a scalar local_sum.
+   FIX: see smem_abuse/ttm_opt.cu.
 
-   WHAT THE HEAT MAP SHOWS
-       The SMEM-tagged line is simply GONE.  There is no cooler version of an
-       unshared shared-memory region -- the fix is to stop allocating it.
-
-   Build: nvcc -O3 -arch=sm_86 -lineinfo -o smem_abuse_opt smem_abuse_opt.cu
+   Build: nvcc -O3 -arch=sm_86 -lineinfo -o ttm_naive ttm_naive.cu
    ========================================================================= */
 #include <cstdio>
 #include <cstdlib>
@@ -80,26 +73,26 @@
 #define RANK 16           /* length of each thread's result vector */
 #define NNZ  32           /* nonzeros processed per thread */
 
-/* OPTIMIZED -- the per-thread result vector lives in registers.
-   No shared memory, no barriers.  The unroll pragmas are what keep acc[] in
-   registers instead of spilling it to local memory. */
-__global__ void ttm_reg(const float * __restrict__ X, const float * __restrict__ U,
-                        float *Y, int n) {
-    float acc[RANK];                               /* <-- registers */
-    int i = blockIdx.x * BLK + threadIdx.x;
+/* INEFFICIENT -- the per-thread result vector lives in shared memory.
+   16 KB/block, and RANK shared-memory read-modify-writes per nonzero. */
+__global__ void ttm_smem(const float * __restrict__ X, const float * __restrict__ U,
+                         float *Y, int n) {
+    __shared__ float Y_shr[BLK][RANK];             /* <-- 16 KB, never shared */
+    int tid = threadIdx.x;
+    int i   = blockIdx.x * BLK + tid;
+    if (i >= n) return;                            /* n need not divide BLK */
 
-#pragma unroll
-    for (int r = 0; r < RANK; ++r) acc[r] = 0.0f;
+    for (int r = 0; r < RANK; ++r) Y_shr[tid][r] = 0.0f;
+    __syncthreads();                               /* <-- buys nothing */
 
     for (int k = 0; k < NNZ; ++k) {
-        float v = X[(size_t)k * n + i];            /* unchanged */
-#pragma unroll
+        float v = X[(size_t)k * n + i];            /* coalesced on purpose */
         for (int r = 0; r < RANK; ++r)
-            acc[r] += v * U[k * RANK + r];         /* <-- register accumulate */
+            Y_shr[tid][r] += v * U[k * RANK + r];  /* <-- SMEM read-modify-write */
     }
+    __syncthreads();                               /* <-- and again */
 
-#pragma unroll
-    for (int r = 0; r < RANK; ++r) Y[(size_t)i * RANK + r] = acc[r];
+    for (int r = 0; r < RANK; ++r) Y[(size_t)i * RANK + r] = Y_shr[tid][r];
 }
 
 int main(void) {
@@ -120,14 +113,14 @@ int main(void) {
     CUDA_CHECK(cudaMemcpy(dX, X, xn * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(dU, U, (size_t)NNZ * RANK * sizeof(float), cudaMemcpyHostToDevice));
 
-    printf("Abuse of shared memory removed  [optimized]\n");
+    printf("Abuse of shared memory  [unoptimized]\n");
     printf("  n=%d, RANK=%d, NNZ/thread=%d, blockDim=%d\n", n, RANK, NNZ, BLK);
-    printf("  shared memory: 0 B/block  (was %zu B)\n",
-           (size_t)BLK * RANK * sizeof(float));
-    printf("  X is %.1f MB; %d register accumulations per thread, 0 SMEM ops\n",
+    printf("  shared memory: %zu B/block  (%d threads x %d floats)\n",
+           (size_t)BLK * RANK * sizeof(float), BLK, RANK);
+    printf("  X is %.1f MB; %d SMEM read-modify-writes per thread\n",
            (double)xn * sizeof(float) / 1e6, NNZ * RANK);
 
-    ttm_reg<<<blocks, BLK>>>(dX, dU, dY, n);
+    ttm_smem<<<blocks, BLK>>>(dX, dU, dY, n);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaMemcpy(Y, dY, (size_t)n * RANK * sizeof(float), cudaMemcpyDeviceToHost));
 
@@ -149,14 +142,14 @@ int main(void) {
     for (int sub = n / 4; sub <= n; sub *= 2) {
         int sb = (sub + BLK - 1) / BLK;
         float ms = 0.0f;
-        TIME_KERNEL(ms, 50, (ttm_reg<<<sb, BLK>>>(dX, dU, dY, n)));
+        TIME_KERNEL(ms, 50, (ttm_smem<<<sb, BLK>>>(dX, dU, dY, n)));
         printf("  %6d threads : %.4f ms\n", sub, ms);
     }
 
     float ms = 0.0f;
-    TIME_KERNEL(ms, 100, (ttm_reg<<<blocks, BLK>>>(dX, dU, dY, n)));
+    TIME_KERNEL(ms, 100, (ttm_smem<<<blocks, BLK>>>(dX, dU, dY, n)));
     printf("\nTiming: %.4f ms\n", ms);
-    printf("\nCompare with smem_abuse/smem_abuse_naive.cu (same math via shared memory).\n");
+    printf("\nCompare with smem_abuse/ttm_opt.cu (same math, registers).\n");
 
     cudaFree(dX); cudaFree(dU); cudaFree(dY);
     free(X); free(U); free(Y);
@@ -164,21 +157,17 @@ int main(void) {
 }
 
 /* Reference run — RTX A4500 (Ampere sm_86, CUDA 13.0), jli256-ub01:
-Abuse of shared memory removed  [optimized]
+Abuse of shared memory  [unoptimized]
   n=65536, RANK=16, NNZ/thread=32, blockDim=256
-  shared memory: 0 B/block  (was 16384 B)
-  X is 8.4 MB; 512 register accumulations per thread, 0 SMEM ops
+  shared memory: 16384 B/block  (256 threads x 16 floats)
+  X is 8.4 MB; 512 SMEM read-modify-writes per thread
 
 Correctness: PASS  (max rel error 0.000e+00)
 
 Problem-size sweep:
-   16384 threads : 0.0223 ms
-   32768 threads : 0.0391 ms
-   65536 threads : 0.0657 ms
+   16384 threads : 0.0249 ms
+   32768 threads : 0.0431 ms
+   65536 threads : 0.0745 ms
 
-Timing: 0.0662 ms      vs smem_abuse_naive.cu 0.0745 ms = 1.13x.
-
-1.13x is a modest win and an honest one: the kernel still has to stream 8.4 MB
-of X from memory, and that floor is the same for both versions. The structural
-win is the 16 KB of shared memory per block handed back to L1.
+Timing: 0.0745 ms      vs ttm_opt.cu 0.0662 ms = 1.13x slower.
 */

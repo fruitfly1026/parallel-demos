@@ -38,11 +38,11 @@
 
        The `%` is a second, separate problem -- integer modulo is slow, and
        NVIDIA's own comment in the sample says so ("modulo arithmetic is
-       slow!").  The fix in thread_divergence_opt.cu removes both at once.
+       slow!").  The fix in reduction_opt.cu removes both at once.
 
-   FIX: see thread_divergence/thread_divergence_opt.cu.
+   FIX: see thread_divergence/reduction_opt.cu.
 
-   Build: nvcc -O3 -arch=sm_86 -lineinfo -o thread_divergence_naive thread_divergence_naive.cu
+   Build: nvcc -O3 -arch=sm_86 -lineinfo -o reduction_naive reduction_naive.cu
    ========================================================================= */
 #include <cstdio>
 #include <cstdlib>
@@ -146,7 +146,7 @@ int main(void) {
     TIME_KERNEL(ms, 50, (reduce0<<<blocks, BLK>>>(din, dpart, n)));
     printf("\nTiming: %.4f ms   %.1f GB/s\n",
            ms, (double)n * sizeof(float) / (ms * 1e-3) / 1e9);
-    printf("\nCompare with thread_divergence/thread_divergence_opt.cu (reduce2).\n");
+    printf("\nCompare with thread_divergence/reduction_opt.cu (reduce2).\n");
 
     cudaFree(din); cudaFree(dpart); free(h); free(p);
     return 0;
@@ -165,6 +165,6 @@ Element-count sweep:
 
 Timing: 0.5030 ms   133.4 GB/s
 
-vs thread_divergence_opt.cu: 0.5030 -> 0.3472 ms = 1.45x total, of which
+vs reduction_opt.cu: 0.5030 -> 0.3472 ms = 1.45x total, of which
 1.39x is the divergence fix alone (reduce1) and 1.04x the bank-conflict fix.
 */

@@ -1,6 +1,6 @@
 /* ============================================================================
    STRIDED (non-coalesced) global access -- the UNOPTIMIZED version.
-   Split out of the repo's 02_vector_add.cu; the fix is strided/strided_opt.cu.
+   Split out of the repo's 02_vector_add.cu; the fix is strided/vadd_opt.cu.
    ----------------------------------------------------------------------------
    Element index = a scattered remap of the thread id, so consecutive threads
    in a warp touch addresses STRIDE floats apart.  The warp's 32 accesses
@@ -19,9 +19,9 @@
 
      (a) CORRECTNESS CHECK  — GPU result vs a CPU reference, PASS/FAIL.
      (b) PARAMETER VARYING  — blockDim 128 / 256 / 1024.
-     (c) THE INEFFICIENCY   — see above; FIX in strided/strided_opt.cu.
+     (c) THE INEFFICIENCY   — see above; FIX in strided/vadd_opt.cu.
 
-   Build: nvcc -O3 -arch=sm_86 -lineinfo -o strided_naive strided_naive.cu                  */
+   Build: nvcc -O3 -arch=sm_86 -lineinfo -o vadd_naive vadd_naive.cu                  */
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
@@ -63,6 +63,14 @@ static float time_kernel(const float *da, const float *db, float *dc, int n,
 
 int main(void) {
     int n = 1 << 24;                              /* 16.7 M elements */
+    /* The scattered index in vadd_naive.cu is a permutation of [0,n) only
+       when STRIDE divides n; otherwise the tail elements are never written and
+       both files would disagree with the CPU reference. Checked here so the
+       constraint fails loudly instead of silently. */
+    if (n % 32 != 0) {
+        fprintf(stderr, "n (%d) must be a multiple of STRIDE (32)\n", n);
+        return 1;
+    }
     size_t bytes = (size_t)n * sizeof(float);
     float *a = (float*)malloc(bytes), *b = (float*)malloc(bytes), *c = (float*)malloc(bytes);
     for (int i = 0; i < n; i++) { a[i] = 1.0f + (i & 7); b[i] = 2.0f + (i & 3); }
@@ -97,7 +105,7 @@ int main(void) {
         double gbps = 3.0 * bytes / (ms * 1e-3) / 1e9;   /* read a,b + write c */
         printf("  blockDim %4d : %.3f ms   %.1f GB/s\n", t, ms, gbps);
     }
-    printf("\nCompare with strided/strided_opt.cu (same work, coalesced indexing).\n");
+    printf("\nCompare with strided/vadd_opt.cu (same work, coalesced indexing).\n");
 
     cudaFree(da); cudaFree(db); cudaFree(dc);
     free(a); free(b); free(c);
@@ -113,5 +121,5 @@ blockDim sweep:
   blockDim  256 : 3.721 ms   54.1 GB/s
   blockDim 1024 : 3.611 ms   55.8 GB/s
 
-vs strided/strided_opt.cu at blockDim 256: 3.721 / 0.353 = 10.5x slower.
+vs strided/vadd_opt.cu at blockDim 256: 3.721 / 0.353 = 10.5x slower.
 */

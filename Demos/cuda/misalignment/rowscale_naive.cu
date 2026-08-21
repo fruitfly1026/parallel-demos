@@ -64,9 +64,9 @@
        DRAM bandwidth -- compare bank_conflict/, where an L1-level effect is
        worth 1.87x at a cache-resident size and only 1.07x at a DRAM-bound one.
 
-   FIX: see misalignment/misalignment_opt.cu -- pad the row pitch.
+   FIX: see misalignment/rowscale_opt.cu -- pad the row pitch.
 
-   Build: nvcc -O3 -arch=sm_86 -lineinfo -o misalignment_naive misalignment_naive.cu
+   Build: nvcc -O3 -arch=sm_86 -lineinfo -o rowscale_naive rowscale_naive.cu
    ========================================================================= */
 #include <cstdio>
 #include <cstdlib>
@@ -203,7 +203,7 @@ int main(void) {
         cudaFree(dx); cudaFree(dy); free(hx); free(hy);
     }
 
-    printf("\nCompare with misalignment/misalignment_opt.cu (padded row pitch).\n");
+    printf("\nCompare with misalignment/rowscale_opt.cu (padded row pitch).\n");
     return 0;
 }
 

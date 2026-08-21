@@ -14,7 +14,7 @@
        inlined form below is equivalent.
 
    ############################################################################
-   #  WHAT CHANGED vs hotspot/hotspot_coalesced.cu                            #
+   #  WHAT CHANGED vs hotspot/gemm_coalesced.cu                            #
    ############################################################################
 
    The index mapping is UNCHANGED -- C_col_idx still comes from threadIdx.x,
@@ -56,7 +56,7 @@
       other warps are still reading).
 
    WHY THAT FIXES THE HOT SPOT
-       In hotspot_coalesced.cu every one of the block's 32 warps re-read the
+       In gemm_coalesced.cu every one of the block's 32 warps re-read the
        same sectors of B out of global memory at every k step (word temperature
        32, sector temperature 32).  Now each tile is fetched from global memory
        ONCE per block, by one cooperative coalesced load, and the 32 warps
@@ -65,7 +65,7 @@
        access.
 
    MEASURED (RTX A4500, N=1024, Nsight Compute)
-                                    hotspot_coalesced.cu   hotspot_tiled.cu
+                                    gemm_coalesced.cu   gemm_tiled.cu
        sectors per global LD request        2.50                4.00
        total global load sectors            2,629,632           139,264   (18.9x fewer)
        kernel time                          1.552 ms            1.235 ms
@@ -76,7 +76,7 @@
        4 sectors is a full 128-byte warp-wide load, i.e. perfect. The number
        that matters is the total, which falls by 18.9x.
 
-   Build: nvcc -O3 -arch=sm_86 -lineinfo -o hotspot_tiled hotspot_tiled.cu
+   Build: nvcc -O3 -arch=sm_86 -lineinfo -o gemm_tiled gemm_tiled.cu
    ========================================================================= */
 #include <cstdio>
 #include <cstdlib>
@@ -156,7 +156,7 @@ __global__ void gemm_v02(size_t m, size_t n, size_t k, T alpha, T const* A,
                       (Cm), (size_t)(N))
 
 #define KERNEL_TITLE "GEMM v02 -- 32x32x32 shared-memory block tiling  [optimized]"
-#define COMPARE_HINT "Compare with hotspot/hotspot_coalesced.cu (gemm_v01, B is hot)."
+#define COMPARE_HINT "Compare with hotspot/gemm_coalesced.cu (gemm_v01, B is hot)."
 
 /* ------------------------------------------------------------------ harness */
 static void gemm_cpu(const float *A, const float *B, float *C, int N) {
@@ -255,7 +255,7 @@ Size sweep:
   N= 512 :     0.163 ms   1648.8 GFLOP/s  (ok)
   N=1024 :     1.235 ms   1739.5 GFLOP/s  (ok)
 
-vs hotspot_coalesced.cu at N=1024: 1.551 -> 1.235 ms = 1.26x = +25.7%
+vs gemm_coalesced.cu at N=1024: 1.551 -> 1.235 ms = 1.26x = +25.7%
 (paper Table 4 reports 26.07% for this step on the A4500).
 
 Correct at sizes that are not a multiple of the tile, unlike the TILE=16

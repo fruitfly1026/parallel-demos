@@ -1,7 +1,7 @@
 /* ============================================================================
    STRIDED (non-coalesced) global access -- the OPTIMIZED version.
    Split out of the repo's 02_vector_add.cu; the unoptimized one is
-   strided/strided_naive.cu.
+   strided/vadd_naive.cu.
    ----------------------------------------------------------------------------
    Thread i touches element i.  Consecutive threads in a warp touch consecutive
    addresses, so the warp's 32 accesses coalesce: 128 bytes = exactly four
@@ -16,27 +16,27 @@
    inefficiency patterns against.
 
    ############################################################################
-   #  WHAT CHANGED vs strided/strided_naive.cu                                #
+   #  WHAT CHANGED vs strided/vadd_naive.cu                                #
    ############################################################################
 
    ONE LINE -- the index expression.  Same arrays, same arithmetic, same launch
    configuration; only how a thread id maps to an element changes:
 
-       strided_naive.cu:
+       vadd_naive.cu:
            int t = blockIdx.x * blockDim.x + threadIdx.x;
            int chunk = n / STRIDE;                        // STRIDE = 32
            int i = (t % chunk) * STRIDE + (t / chunk);    // scattered permutation
            if (i < n) c[i] = a[i] + b[i];
 
-       strided_opt.cu:
+       vadd_opt.cu:
            int i = blockIdx.x * blockDim.x + threadIdx.x; // identity mapping
            if (i < n) c[i] = a[i] + b[i];
 
    The naive index is still a permutation of [0,n), so both kernels write every
    element exactly once and both PASS the correctness check -- the ONLY
    difference is the order in which memory is touched.  Consecutive lanes in
-   strided_naive.cu land STRIDE floats = 128 bytes apart, one useful word per
-   32-byte sector; in strided_opt.cu they land on consecutive words, so a
+   vadd_naive.cu land STRIDE floats = 128 bytes apart, one useful word per
+   32-byte sector; in vadd_opt.cu they land on consecutive words, so a
    warp's 32 accesses become four full sectors.
 
    Also removed: the `#define STRIDE 32` and the `chunk` computation, which
@@ -46,7 +46,7 @@
      (b) PARAMETER VARYING  — blockDim 128 / 256 / 1024.
      (c) THE FIX            — index by the natural thread id.
 
-   Build: nvcc -O3 -arch=sm_86 -lineinfo -o strided_opt strided_opt.cu                        */
+   Build: nvcc -O3 -arch=sm_86 -lineinfo -o vadd_opt vadd_opt.cu                        */
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
@@ -84,6 +84,14 @@ static float time_kernel(const float *da, const float *db, float *dc, int n,
 
 int main(void) {
     int n = 1 << 24;                              /* 16.7 M elements */
+    /* The scattered index in vadd_naive.cu is a permutation of [0,n) only
+       when STRIDE divides n; otherwise the tail elements are never written and
+       both files would disagree with the CPU reference. Checked here so the
+       constraint fails loudly instead of silently. */
+    if (n % 32 != 0) {
+        fprintf(stderr, "n (%d) must be a multiple of STRIDE (32)\n", n);
+        return 1;
+    }
     size_t bytes = (size_t)n * sizeof(float);
     float *a = (float*)malloc(bytes), *b = (float*)malloc(bytes), *c = (float*)malloc(bytes);
     for (int i = 0; i < n; i++) { a[i] = 1.0f + (i & 7); b[i] = 2.0f + (i & 3); }
@@ -118,7 +126,7 @@ int main(void) {
         double gbps = 3.0 * bytes / (ms * 1e-3) / 1e9;   /* read a,b + write c */
         printf("  blockDim %4d : %.3f ms   %.1f GB/s\n", t, ms, gbps);
     }
-    printf("\nCompare with strided/strided_naive.cu (same work, scattered indexing).\n");
+    printf("\nCompare with strided/vadd_naive.cu (same work, scattered indexing).\n");
 
     cudaFree(da); cudaFree(db); cudaFree(dc);
     free(a); free(b); free(c);
@@ -134,5 +142,5 @@ blockDim sweep:
   blockDim  256 : 0.353 ms   570.7 GB/s
   blockDim 1024 : 0.355 ms   567.9 GB/s
 
-vs strided/strided_naive.cu at blockDim 256: 0.353 vs 3.721 ms = 10.5x faster.
+vs strided/vadd_naive.cu at blockDim 256: 0.353 vs 3.721 ms = 10.5x faster.
 */

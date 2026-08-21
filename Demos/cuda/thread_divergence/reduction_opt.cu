@@ -8,7 +8,7 @@
    SharedMemory<T>() -> a plain float array.
 
    ############################################################################
-   #  WHAT CHANGED vs thread_divergence/thread_divergence_naive.cu            #
+   #  WHAT CHANGED vs thread_divergence/reduction_naive.cu            #
    ############################################################################
 
    THE LOOP DIRECTION AND THE BRANCH CONDITION.  Everything else -- the shared
@@ -67,7 +67,7 @@
            reduce0 -> reduce1   = the divergence fix alone
            reduce1 -> reduce2   = the bank-conflict fix alone   (see bank_conflict/)
 
-   Build: nvcc -O3 -arch=sm_86 -lineinfo -o thread_divergence_opt thread_divergence_opt.cu
+   Build: nvcc -O3 -arch=sm_86 -lineinfo -o reduction_opt reduction_opt.cu
    ========================================================================= */
 #include <cstdio>
 #include <cstdlib>
@@ -180,7 +180,7 @@ int main(void) {
     printf("\nTiming, isolating the two effects:\n");
     printf("  reduce1 (divergence fixed, conflicts remain) : %.4f ms\n", t1);
     printf("  reduce2 (also conflict-free)                 : %.4f ms\n", t2);
-    printf("\nCompare with thread_divergence_naive.cu (reduce0) for the divergence cost.\n");
+    printf("\nCompare with reduction_naive.cu (reduce0) for the divergence cost.\n");
 
     cudaFree(din); cudaFree(dpart); free(h); free(p);
     return 0;

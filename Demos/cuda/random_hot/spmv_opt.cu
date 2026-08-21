@@ -3,7 +3,7 @@
    [paper Fig. 5(f); Table 2 "SpMV / spmv_csr / x / Random hot"]
    ----------------------------------------------------------------------------
    ############################################################################
-   #  WHAT CHANGED vs random_hot/random_hot_naive.cu                          #
+   #  WHAT CHANGED vs random_hot/spmv_naive.cu                          #
    ############################################################################
 
    THE DATA CHANGED.  THE KERNEL DID NOT.  That is the whole lesson of a
@@ -57,10 +57,10 @@
 
    This is kept in the file deliberately.  "Put it in shared memory" is not a
    fix, it is a hypothesis -- and the reason to have a profiler is to test it.
-   Compare with hotspot/hotspot_tiled.cu, where tiling DOES pay off (1.26x)
+   Compare with hotspot/gemm_tiled.cu, where tiling DOES pay off (1.26x)
    because there the reuse is 1024 threads deep rather than 8 warps wide.
 
-   Build: nvcc -O3 -arch=sm_86 -lineinfo -o random_hot_opt random_hot_opt.cu
+   Build: nvcc -O3 -arch=sm_86 -lineinfo -o spmv_opt spmv_opt.cu
    ========================================================================= */
 #include <cstdio>
 #include <cstdlib>
@@ -96,7 +96,7 @@
 #define BAND 96                  /* half-bandwidth of the reordered matrix */
 #define WIN  512                 /* SMEM window capacity, floats (2 KB) */
 
-/* Identical to the kernel in random_hot_naive.cu -- used here to measure what
+/* Identical to the kernel in spmv_naive.cu -- used here to measure what
    the data reordering alone is worth. */
 __global__ void spmv_coo(int nnz, const int * __restrict__ rowidx,
                          const int * __restrict__ colidx,
@@ -230,7 +230,7 @@ int main(void) {
     printf("  reordered data + smem window         : %.4f ms   %.2f Gnnz/s   (%.2fx -- see\n"
            "                                         the header: staging does not pay here)\n",
            t_b, (double)nnz / (t_b * 1e-3) / 1e9, t_a / t_b);
-    printf("\nCompare with random_hot/random_hot_naive.cu (same kernel, random columns).\n");
+    printf("\nCompare with random_hot/spmv_naive.cu (same kernel, random columns).\n");
 
     cudaFree(drow); cudaFree(dcol); cudaFree(dval); cudaFree(dx); cudaFree(dy);
     free(rowidx); free(colidx); free(val); free(x); free(y); free(ref);
@@ -255,6 +255,6 @@ Timing (full matrix):
   reordered data, same kernel as naive : 0.8869 ms   37.83 Gnnz/s   <-- the fix
   reordered data + smem window         : 1.0054 ms   33.37 Gnnz/s   (0.88x)
 
-vs random_hot_naive.cu: 4.1674 -> 0.8869 ms = 4.70x, from changing the data
+vs spmv_naive.cu: 4.1674 -> 0.8869 ms = 4.70x, from changing the data
 alone. The shared-memory window is a measured negative; see the header.
 */

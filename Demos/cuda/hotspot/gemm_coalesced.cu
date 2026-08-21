@@ -1,63 +1,37 @@
 /* ============================================================================
-   cuThermo pattern: MEMORY FALSE SHARING  -- the OPTIMIZED version.
-   [paper Fig. 5(b); Sec. 6.1; Table 4: 721.79% on A4500, 672.87% on RTX 4090]
+   cuThermo pattern: HOT SPOT  -- the UNOPTIMIZED version.
+   [paper Fig. 5(e); Table 2 "GEMM / gemm_v01 / B / Hot"; Table 4 "26.07%"]
    ----------------------------------------------------------------------------
    SOURCE
        Kernel `gemm_v01` is taken verbatim from
        https://github.com/leimao/CUDA-GEMM-Optimization
            src/01_coalesced_global_memory_access.cu
-       reference [20] of the cuThermo paper.  Only the host harness is new.
+       reference [20] of the cuThermo paper.  This is the SAME kernel as
+       false_sharing/gemm_opt.cu -- it is the fixed version of the false-sharing
+       problem, and the starting point for the next one.
 
-   ############################################################################
-   #  WHAT CHANGED vs false_sharing/false_sharing_naive.cu                                  #
-   ############################################################################
+   THE INEFFICIENCY THAT IS LEFT
+       Coalescing is now perfect, but there is no data REUSE: every thread
+       re-reads A and B straight from global memory on every k step.
 
-   TWO LINES.  The body of the kernel -- the k loop, the multiply-accumulate,
-   the store -- is character-for-character identical.  Only which thread index
-   feeds which matrix index is swapped:
+       B[k_idx*ldb + C_col_idx] depends only on threadIdx.x, so it is byte-for-
+       byte identical for all 32 warps of the block.  All 32 warps hammer the
+       same 4 sectors of B at every k:
 
-       naive.cu (gemm_v00):
-           size_t const C_row_idx{blockIdx.x * blockDim.x + threadIdx.x};   // x -> ROW
-           size_t const C_col_idx{blockIdx.y * blockDim.y + threadIdx.y};   // y -> COL
+           Sector 0 | 32 | 32 | 32 | 32 | 32 | 32 | 32 | 32 |   total = 32
+           Sector 1 | 32 | 32 | 32 | 32 | 32 | 32 | 32 | 32 |   total = 32
 
-       opt.cu (gemm_v01):
-           size_t const C_col_idx{blockIdx.x * blockDim.x + threadIdx.x};   // x -> COL
-           size_t const C_row_idx{blockIdx.y * blockDim.y + threadIdx.y};   // y -> ROW
-
-   ...and, to match, the launch grid swaps its two extents:
-
-       naive.cu:  grid{(m + bx - 1)/bx, (n + by - 1)/by}
-       opt.cu :   grid{(n + bx - 1)/bx, (m + by - 1)/by}
-
-   WHY THAT FIXES IT
-       threadIdx.x is the fastest-varying index, so it must be mapped to the
-       CONTIGUOUS dimension.  Now the 32 lanes of a warp hold 32 consecutive
-       C_col_idx values, so
-
-           B[k_idx*ldb + C_col_idx]     32 consecutive words = 4 sectors, one warp
-           C[C_row_idx*ldc + C_col_idx] 32 consecutive words = 4 sectors, one warp
-           A[C_row_idx*lda + k_idx]     constant across the warp -> broadcast
-
-       Every word of every fetched sector is now claimed by the SAME warp, so
-       the hardware coalesces them into one transaction each.  In the heat map
-       the sector total drops from 8 back to 1:
-
-           naive.cu   Sector | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 |  total = 8
-           opt.cu     Sector | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 |  total = 1
+       Uniformly hot in the words AND in the sector -- the Fig. 5(e) signature,
+       and precisely what Table 2 records as "gemm_v01 / B / Hot".  The reuse
+       is real, it is just being served by L1 instead of by shared memory.
 
    MEASURED (RTX A4500, N=1024, Nsight Compute)
-                                          naive.cu    opt.cu
-       sectors per global LOAD request      16.53       2.50
-       sectors per global STORE request     32          4
-       total global load sectors            17.4 M      2.63 M
-       kernel time                          12.613 ms   1.552 ms   -> 8.13x
+       sectors per global LOAD request : 2.50   (coalescing is fine)
+       total global load sectors       : 2.63 M (the traffic is not)
 
-       8.13x is a 713% improvement, matching the paper's reported 721.79%.
+   FIX: see hotspot/gemm_tiled.cu.
 
-   NOTE: opt.cu still re-reads A and B from global memory on every k step --
-   that leftover is the HOT SPOT pattern, and it is what hotspot/hotspot_tiled.cu fixes.
-
-   Build: nvcc -O3 -arch=sm_86 -lineinfo -o false_sharing_opt false_sharing_opt.cu
+   Build: nvcc -O3 -arch=sm_86 -lineinfo -o gemm_coalesced gemm_coalesced.cu
    ========================================================================= */
 #include <cstdio>
 #include <cstdlib>
@@ -80,15 +54,15 @@ __global__ void gemm_v01(size_t m, size_t n, size_t k, T alpha, T const* A,
                          size_t lda, T const* B, size_t ldb, T beta, T* C,
                          size_t ldc)
 {
-    // Compute the row and column of C that this thread is responsible for.
-    size_t const C_col_idx{blockIdx.x * blockDim.x + threadIdx.x};  /* <-- swapped */
-    size_t const C_row_idx{blockIdx.y * blockDim.y + threadIdx.y};  /* <-- swapped */
+    size_t const C_col_idx{blockIdx.x * blockDim.x + threadIdx.x};
+    size_t const C_row_idx{blockIdx.y * blockDim.y + threadIdx.y};
 
     if (C_row_idx < m && C_col_idx < n)
     {
         T sum{static_cast<T>(0)};
         for (size_t k_idx{0U}; k_idx < k; ++k_idx)
         {
+            /* every k step goes back to global memory for both operands */
             sum += A[C_row_idx * lda + k_idx] * B[k_idx * ldb + C_col_idx];
         }
         C[C_row_idx * ldc + C_col_idx] =
@@ -96,15 +70,14 @@ __global__ void gemm_v01(size_t m, size_t n, size_t k, T alpha, T const* A,
     }
 }
 
-/* leimao's launch config for v01: grid.x covers n, grid.y covers m (swapped). */
 #define LAUNCH(A, B, Cm, N)                                                   \
     gemm_v01<float><<<dim3(((unsigned)(N)+31u)/32u, ((unsigned)(N)+31u)/32u),  \
                       dim3(32u, 32u)>>>((size_t)(N), (size_t)(N), (size_t)(N),\
                       1.0f, (A), (size_t)(N), (B), (size_t)(N), 0.0f,         \
                       (Cm), (size_t)(N))
 
-#define KERNEL_TITLE "GEMM v01 -- coalesced, false sharing removed  [optimized]"
-#define COMPARE_HINT "Compare with false_sharing/false_sharing_naive.cu (gemm_v00). Next step: hotspot/hotspot_tiled.cu."
+#define KERNEL_TITLE "GEMM v01 -- coalesced but B is a HOT SPOT  [unoptimized]"
+#define COMPARE_HINT "Compare with hotspot/gemm_tiled.cu (gemm_v02: 32x32x32 shared-memory block tiling)."
 
 /* ------------------------------------------------------------------ harness */
 static void gemm_cpu(const float *A, const float *B, float *C, int N) {
@@ -192,17 +165,16 @@ int main(void) {
 }
 
 /* Reference run — RTX A4500 (Ampere sm_86, CUDA 13.0), jli256-ub01:
-GEMM v01 -- coalesced, false sharing removed  [optimized]
+GEMM v01 -- coalesced but B is a HOT SPOT  [unoptimized]
 blockDim 32x32; alpha=1, beta=0 so C = A*B
 
 Correctness (N=512, integer-valued so exact):
   PASS  (max error 0.000e+00, 0/262144 elements wrong)
 
 Size sweep:
-  N= 256 :     0.043 ms    776.5 GFLOP/s  (ok)
+  N= 256 :     0.043 ms    771.5 GFLOP/s  (ok)
   N= 512 :     0.204 ms   1314.7 GFLOP/s  (ok)
-  N=1024 :     1.550 ms   1385.1 GFLOP/s  (ok)
+  N=1024 :     1.551 ms   1384.8 GFLOP/s  (ok)
 
-vs false_sharing_naive.cu at N=1024: 12.613 -> 1.550 ms = 8.14x = +713%
-(paper Table 4 reports 721.79% for this step on the A4500).
+vs gemm_tiled.cu at N=1024: 1.551 / 1.235 = 1.26x slower.
 */

@@ -30,7 +30,7 @@
    ABOUT THE atomicAdd
        Scattering into y needs an atomic, and atomic contention is a REAL cost
        -- but it is write contention, not the random hot spot we are studying.
-       random_hot_opt.cu keeps the identical atomicAdd so that cost is the same
+       spmv_opt.cu keeps the identical atomicAdd so that cost is the same
        on both sides and the measured difference isolates the x gather.
 
    PROVENANCE
@@ -38,9 +38,9 @@
        benchmark suite.  The pattern is the one the paper reports for SpMV's
        x vector; the timings are this benchmark's own.
 
-   FIX: see random_hot/random_hot_opt.cu.
+   FIX: see random_hot/spmv_opt.cu.
 
-   Build: nvcc -O3 -arch=sm_86 -lineinfo -o random_hot_naive random_hot_naive.cu
+   Build: nvcc -O3 -arch=sm_86 -lineinfo -o spmv_naive spmv_naive.cu
    ========================================================================= */
 #include <cstdio>
 #include <cstdlib>
@@ -163,7 +163,7 @@ int main(void) {
     TIME_KERNEL(ms, 50, (spmv_coo<<<blocks, BLK>>>(nnz, drow, dcol, dval, dx, dy)));
     printf("\nTiming (full matrix): %.4f ms   %.2f Gnnz/s\n",
            ms, (double)nnz / (ms * 1e-3) / 1e9);
-    printf("\nCompare with random_hot/random_hot_opt.cu (same kernel, reordered data).\n");
+    printf("\nCompare with random_hot/spmv_opt.cu (same kernel, reordered data).\n");
 
     cudaFree(drow); cudaFree(dcol); cudaFree(dval); cudaFree(dx); cudaFree(dy);
     free(rowidx); free(colidx); free(val); free(x); free(y); free(ref);
@@ -185,6 +185,6 @@ Nonzero-count sweep (same random layout):
 Timing (full matrix): 4.1674 ms   8.05 Gnnz/s
 
 Throughput is flat in nnz -- every gather is an independent DRAM round trip,
-so there is no economy of scale to be had. vs random_hot_opt.cu: 4.1674 /
+so there is no economy of scale to be had. vs spmv_opt.cu: 4.1674 /
 0.8869 = 4.70x slower.
 */

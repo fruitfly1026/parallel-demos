@@ -38,9 +38,9 @@
        conflict-free -- lanes vary threadIdx.x, which is the fast dimension.
        Only the column read conflicts.
 
-   FIX: see bank_conflict/bank_conflict_opt.cu -- one character.
+   FIX: see bank_conflict/transpose_opt.cu -- one character.
 
-   Build: nvcc -O3 -arch=sm_86 -lineinfo -o bank_conflict_naive bank_conflict_naive.cu
+   Build: nvcc -O3 -arch=sm_86 -lineinfo -o transpose_naive transpose_naive.cu
    ========================================================================= */
 #include <cstdio>
 #include <cstdlib>
@@ -95,6 +95,13 @@ __global__ void transpose_conflicts(float *odata, const float * __restrict__ ida
 
 int main(void) {
     const int width = 2048;                     /* 2048 x 2048 floats = 16 MB */
+    /* The grid is width/TILE blocks each way, so a width that TILE does not
+       divide would leave the last rows and columns untransposed. Checked here
+       so the constraint fails loudly instead of silently. */
+    if (width % TILE != 0) {
+        fprintf(stderr, "width (%d) must be a multiple of TILE (%d)\n", width, TILE);
+        return 1;
+    }
     const size_t n = (size_t)width * width;
     const size_t nb = n * sizeof(float);
 
@@ -147,7 +154,7 @@ int main(void) {
     TIME_KERNEL(ms, 50, (transpose_conflicts<<<grd, blk>>>(dout, din, width)));
     printf("\nTiming (%dx%d): %.4f ms   %.1f GB/s\n",
            width, width, ms, 2.0 * (double)nb / (ms * 1e-3) / 1e9);
-    printf("\nCompare with bank_conflict/bank_conflict_opt.cu (tile padded to [%d][%d]).\n",
+    printf("\nCompare with bank_conflict/transpose_opt.cu (tile padded to [%d][%d]).\n",
            TILE, TILE + 1);
 
     cudaFree(din); cudaFree(dout); free(h); free(g);

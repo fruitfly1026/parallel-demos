@@ -3,7 +3,7 @@
    [paper Fig. 5(c) and Fig. 6]
    ----------------------------------------------------------------------------
    ############################################################################
-   #  WHAT CHANGED vs misalignment/misalignment_naive.cu                      #
+   #  WHAT CHANGED vs misalignment/rowscale_naive.cu                      #
    ############################################################################
 
    ONE EXPRESSION, on the host side.  `row_scale` is byte-for-byte the kernel
@@ -65,7 +65,7 @@
               Sector 4 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 |  total = 2
        opt    every sector | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 |  total = 1
 
-   Build: nvcc -O3 -arch=sm_86 -lineinfo -o misalignment_opt misalignment_opt.cu
+   Build: nvcc -O3 -arch=sm_86 -lineinfo -o rowscale_opt rowscale_opt.cu
    ========================================================================= */
 #include <cstdio>
 #include <cstdlib>
@@ -105,7 +105,7 @@ __global__ void offset_copy(float *out, const float * __restrict__ in, int s, in
     if (i < n) out[i] = in[i] + 1.0f;
 }
 
-/* Identical to the kernel in misalignment_naive.cu -- it always took the row
+/* Identical to the kernel in rowscale_naive.cu -- it always took the row
    stride as a parameter; only the value it is handed changes. */
 __global__ void row_scale(float *y, const float * __restrict__ x,
                           int nx, int pitch) {
@@ -200,7 +200,7 @@ int main(void) {
         cudaFree(dx); cudaFree(dy); free(hx); free(hy);
     }
 
-    printf("\nCompare with misalignment/misalignment_naive.cu (pitch = nx = 1001).\n");
+    printf("\nCompare with misalignment/rowscale_naive.cu (pitch = nx = 1001).\n");
     return 0;
 }
 

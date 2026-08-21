@@ -2,7 +2,7 @@
    SHARED-MEMORY BANK CONFLICTS -- the OPTIMIZED version.
    ----------------------------------------------------------------------------
    ############################################################################
-   #  WHAT CHANGED vs bank_conflict/bank_conflict_naive.cu                    #
+   #  WHAT CHANGED vs bank_conflict/transpose_naive.cu                    #
    ############################################################################
 
    ONE CHARACTER.  The shared tile gains a padding column:
@@ -39,7 +39,7 @@
            l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_ld.sum
        which should drop to ~0 here while staying large in the naive version.
 
-   Build: nvcc -O3 -arch=sm_86 -lineinfo -o bank_conflict_opt bank_conflict_opt.cu
+   Build: nvcc -O3 -arch=sm_86 -lineinfo -o transpose_opt transpose_opt.cu
    ========================================================================= */
 #include <cstdio>
 #include <cstdlib>
@@ -95,6 +95,13 @@ __global__ void transpose_padded(float *odata, const float * __restrict__ idata,
 
 int main(void) {
     const int width = 2048;                     /* 2048 x 2048 floats = 16 MB */
+    /* The grid is width/TILE blocks each way, so a width that TILE does not
+       divide would leave the last rows and columns untransposed. Checked here
+       so the constraint fails loudly instead of silently. */
+    if (width % TILE != 0) {
+        fprintf(stderr, "width (%d) must be a multiple of TILE (%d)\n", width, TILE);
+        return 1;
+    }
     const size_t n = (size_t)width * width;
     const size_t nb = n * sizeof(float);
 
@@ -149,7 +156,7 @@ int main(void) {
     TIME_KERNEL(ms, 50, (transpose_padded<<<grd, blk>>>(dout, din, width)));
     printf("\nTiming (%dx%d): %.4f ms   %.1f GB/s\n",
            width, width, ms, 2.0 * (double)nb / (ms * 1e-3) / 1e9);
-    printf("\nCompare with bank_conflict/bank_conflict_naive.cu (unpadded tile).\n");
+    printf("\nCompare with bank_conflict/transpose_naive.cu (unpadded tile).\n");
 
     cudaFree(din); cudaFree(dout); free(h); free(g);
     return 0;
