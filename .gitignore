@@ -10,3 +10,9 @@ Demos/cuda/0*_*
 !Demos/**/*.cu
 !Demos/**/*.py
 !Demos/**/*.batch
+
+# compiled demo binaries inside the cuda pattern folders
+Demos/cuda/*/*
+!Demos/cuda/*/*.cu
+!Demos/cuda/*/*.md
+!Demos/cuda/*/Makefile
