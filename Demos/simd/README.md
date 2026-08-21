@@ -37,3 +37,16 @@ make run        # build then run each demo
 make avx2       # rebuild with the AVX2-only floor (no AVX-512)
 make vecreport  # show which loops the compiler vectorized in demo 04
 ```
+
+## Verified reference results
+Measured on Intel Xeon w7-2495X (AVX-512), gcc `-O3 -march=native`, single-thread.
+The SIMD win is largest in-cache and shrinks toward 1× at N=2²⁶ (DRAM-bandwidth wall):
+
+| Demo | Correctness | scalar → SIMD (in-cache 2¹⁰ → streaming 2²⁶) |
+|------|-------------|----------------------------------------------|
+| 01 vector_add | PASS (0 err) | 2.6× → ~1.0× |
+| 02 saxpy | PASS (0 err) | up to 7× (FMA) → 1.08× |
+| 03 dot_product | PASS | 2.0× (1 acc) → 2.4× (4 acc); also **far more accurate** (naive fp32 sum saturates ~26% low at 67 M terms) |
+| 04 auto_vectorize | PASS (0 err) | 6.4× → 2.6× (compiler AVX-512, zero intrinsics) |
+
+Each `.c` file also embeds these reference numbers as a trailing comment block.
